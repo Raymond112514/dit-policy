@@ -15,6 +15,8 @@ import tqdm
 from robobuf import ReplayBuffer as RB
 from torch.utils.data import Dataset, IterableDataset
 
+from data4robotics.task_conditioning import TaskConditioningEncoder
+
 # cache loading from the buffer list to half memory overhead
 buf_cache = dict()
 BUF_SHUFFLE_RNG = 3904767649
@@ -80,6 +82,9 @@ class RobobufReplayBuffer(Dataset):
         goal_geom_prob=0.01,
         past_frames=0,
         ac_dim=7,
+        task_conditioning=False,
+        task_conditioning_mode=None,
+        language_embedding_path=None,
     ):
         assert mode in ("train", "test"), "Mode must be train/test"
         buf = _cached_load(buffer_path)
@@ -112,6 +117,18 @@ class RobobufReplayBuffer(Dataset):
         self.goal_indexes = set(goal_indexes)
         assert all([g in self.cam_indexes for g in self.goal_indexes])
 
+        self.task_conditioning = task_conditioning
+        self._task_encoder = None
+        if self.task_conditioning:
+            self._task_encoder = TaskConditioningEncoder(
+                mode=task_conditioning_mode,
+                language_embedding_path=language_embedding_path,
+            )
+            print(
+                f"Task conditioning enabled: mode={task_conditioning_mode}, "
+                f"dim={self._task_encoder.dim}"
+            )
+
         for idx in tqdm.tqdm(index_list):
             t = buf[idx]
 
@@ -138,13 +155,14 @@ class RobobufReplayBuffer(Dataset):
                 )
 
             loss_mask = np.array(loss_mask, dtype=np.float32)
-            self.s_a_mask.append((t, a_t, loss_mask, loop_t))
+            obs_meta = t.obs.obs if self.task_conditioning else None
+            self.s_a_mask.append((t, a_t, loss_mask, loop_t, obs_meta))
 
     def __len__(self):
         return len(self.s_a_mask)
 
     def __getitem__(self, idx):
-        step, a_t, loss_mask, goal = self.s_a_mask[idx]
+        step, a_t, loss_mask, goal, obs_meta = self.s_a_mask[idx]  # obs_meta may be None
 
         if self.goal_indexes:
             while np.random.uniform() > self.goal_geom_prob and goal.next is not None:
@@ -172,4 +190,9 @@ class RobobufReplayBuffer(Dataset):
         assert (
             loss_mask.shape[0] == a_t.shape[0]
         ), "a_t and mask shape must be ac_chunk!"
+
+        if self.task_conditioning:
+            task_vec = self._task_encoder.encode_transition_obs(obs_meta)
+            task_t = torch.from_numpy(task_vec)
+            return (i_t, o_t), a_t, loss_mask, task_t
         return (i_t, o_t), a_t, loss_mask

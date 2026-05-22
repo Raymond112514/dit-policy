@@ -21,12 +21,16 @@ imgs_per_cam: ${add:${img_chunk},${len:${task.train_buffer.goal_indexes}}}
 share_cam_features: False
 early_fusion: False
 feat_norm: null
+token_dim: 256
+task_conditioning: ${task_conditioning}
+task_conditioning_mode: ${task_conditioning_mode}
+language_embedding_path: ${language_embedding_path}
 
 noise_net_kwargs:
-  time_dim: 256
-  hidden_dim: 512
-  num_blocks: 6
-  dim_feedforward: 2048
+  time_dim: 128
+  hidden_dim: 256
+  num_blocks: 4
+  dim_feedforward: 512
   dropout: ${agent.dropout}
   nhead: 8
   activation: "gelu"

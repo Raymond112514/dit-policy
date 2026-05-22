@@ -350,6 +350,9 @@ class DiffusionTransformerAgent(BaseAgent):
         feat_norm=None,
         token_dim=None,
         noise_net_kwargs=dict(),
+        task_conditioning=False,
+        task_conditioning_mode=None,
+        language_embedding_path=None,
     ):
 
         # initialize obs and img tokenizers
@@ -364,6 +367,9 @@ class DiffusionTransformerAgent(BaseAgent):
             dropout=dropout,
             feat_norm=feat_norm,
             token_dim=token_dim,
+            task_conditioning=task_conditioning,
+            task_conditioning_mode=task_conditioning_mode,
+            language_embedding_path=language_embedding_path,
         )
 
         self.noise_net = _DiTNoiseNet(
@@ -389,10 +395,10 @@ class DiffusionTransformerAgent(BaseAgent):
             prediction_type="epsilon",
         )
 
-    def forward(self, imgs, obs, ac_flat, mask_flat):
+    def forward(self, imgs, obs, ac_flat, mask_flat, task=None):
         # get observation encoding and sample noise/timesteps
         B, device = obs.shape[0], obs.device
-        s_t = self.tokenize_obs(imgs, obs)
+        s_t = self.tokenize_obs(imgs, obs, task=task)
         timesteps = torch.randint(
             low=0, high=self._train_diffusion_steps, size=(B,), device=device
         ).long()
@@ -411,10 +417,10 @@ class DiffusionTransformerAgent(BaseAgent):
         loss = (loss * mask).sum(1)  # mask the loss to only consider "real" acs
         return loss.mean()
 
-    def get_actions(self, imgs, obs, n_steps=None):
+    def get_actions(self, imgs, obs, task=None, n_steps=None):
         # get observation encoding and sample noise
         B, device = obs.shape[0], obs.device
-        s_t = self.tokenize_obs(imgs, obs)
+        s_t = self.tokenize_obs(imgs, obs, task=task)
         enc_cache = None
         noise_actions = torch.randn(B, self.ac_chunk, self.ac_dim, device=device)
 

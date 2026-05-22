@@ -9,6 +9,11 @@ import copy
 import torch
 from torch import nn
 
+from data4robotics.task_conditioning import (
+    TASK_CONDITIONING_MODES,
+    task_conditioning_dim,
+)
+
 
 class _BatchNorm1DHelper(nn.BatchNorm1d):
     def forward(self, x):
@@ -32,8 +37,17 @@ class BaseAgent(nn.Module):
         dropout=0,
         feat_norm=None,
         token_dim=None,
+        task_conditioning=False,
+        task_conditioning_mode=None,
+        language_embedding_path=None,
     ):
         super().__init__()
+
+        self._n_cams = n_cams
+        self.task_conditioning = task_conditioning
+        self.task_conditioning_mode = (
+            task_conditioning_mode.lower() if task_conditioning_mode else None
+        )
 
         # store visual features (duplicate weights if shared)
         self._share_cam_features = share_cam_features
@@ -63,6 +77,23 @@ class BaseAgent(nn.Module):
             assert not use_obs
             self._obs_strat = None
 
+        self._task_text_dim = 0
+        self._task_text_proc = None
+        if self.task_conditioning:
+            assert self.task_conditioning_mode in TASK_CONDITIONING_MODES, (
+                f"task_conditioning_mode must be one of {TASK_CONDITIONING_MODES}, "
+                f"got {self.task_conditioning_mode!r}"
+            )
+            self._task_text_dim = task_conditioning_dim(self.task_conditioning_mode)
+            if self._obs_strat == "add_token":
+                self._n_tokens += 1
+                self._task_text_proc = nn.Sequential(
+                    nn.Dropout(p=0.0),
+                    nn.Linear(self._task_text_dim, self._token_dim),
+                )
+            elif self._obs_strat == "pad_img_tokens":
+                self._token_dim += self._task_text_dim
+
         # build (optional) token feature projection layer
         linear_proj = nn.Identity()
         if token_dim is not None and token_dim != self._token_dim:
@@ -81,23 +112,34 @@ class BaseAgent(nn.Module):
         # final token post proc network
         self.post_proc = nn.Sequential(linear_proj, norm, nn.Dropout(dropout))
 
-    def forward(self, imgs, obs, ac_flat, mask_flat):
+        # unused at runtime; kept so Hydra can pass language_embedding_path
+        self._language_embedding_path = language_embedding_path
+
+    def forward(self, imgs, obs, ac_flat, mask_flat, task=None):
         raise NotImplementedError
 
-    def get_actions(self, img, obs):
+    def get_actions(self, img, obs, task=None):
         raise NotImplementedError
 
-    def tokenize_obs(self, imgs, obs, flatten=False):
-        # start by getting image tokens
+    def tokenize_obs(self, imgs, obs, task=None, flatten=False):
         tokens = self.embed(imgs)
 
         if self._obs_strat == "add_token":
             obs_token = self._obs_proc(obs)[:, None]
             tokens = torch.cat((tokens, obs_token), 1)
+            if self.task_conditioning and self._task_text_proc is not None:
+                assert task is not None, "task tensor required when task_conditioning is enabled"
+                task_token = self._task_text_proc(task)[:, None]
+                tokens = torch.cat((tokens, task_token), 1)
         elif self._obs_strat == "pad_img_tokens":
             obs = self._obs_proc(obs)
             obs = obs[:, None].repeat((1, tokens.shape[1], 1))
-            tokens = torch.cat((obs, tokens), 2)
+            if self.task_conditioning:
+                assert task is not None, "task tensor required when task_conditioning is enabled"
+                task = task[:, None].repeat((1, tokens.shape[1], 1))
+                tokens = torch.cat((task, obs, tokens), 2)
+            else:
+                tokens = torch.cat((obs, tokens), 2)
         else:
             assert self._obs_strat is None
 
@@ -165,6 +207,9 @@ class MLPAgent(BaseAgent):
         early_fusion=False,
         feat_norm="layer_norm",
         token_dim=None,
+        task_conditioning=False,
+        task_conditioning_mode=None,
+        language_embedding_path=None,
     ):
 
         # initialize obs and img tokenizers
@@ -179,6 +224,9 @@ class MLPAgent(BaseAgent):
             dropout=dropout,
             feat_norm=feat_norm,
             token_dim=token_dim,
+            task_conditioning=task_conditioning,
+            task_conditioning_mode=task_conditioning_mode,
+            language_embedding_path=language_embedding_path,
         )
 
         # assign policy class
@@ -193,8 +241,8 @@ class MLPAgent(BaseAgent):
             layers.append(nn.Dropout(dropout))
         self._mlp = nn.Sequential(*layers)
 
-    def forward(self, imgs, obs, ac_flat, mask_flat):
-        s_t = self._mlp_forward(imgs, obs)
+    def forward(self, imgs, obs, ac_flat, mask_flat, task=None):
+        s_t = self._mlp_forward(imgs, obs, task)
         action_dist = self._policy(s_t)
         loss = (
             -torch.mean(action_dist.masked_log_prob(ac_flat, mask_flat))
@@ -203,12 +251,12 @@ class MLPAgent(BaseAgent):
         )
         return loss
 
-    def get_actions(self, img, obs, zero_std=True):
-        policy_in = self._mlp_forward(img, obs)
+    def get_actions(self, img, obs, task=None, zero_std=True):
+        policy_in = self._mlp_forward(img, obs, task)
         return self._policy.get_actions(policy_in, zero_std=zero_std)
 
-    def _mlp_forward(self, imgs, obs):
-        tokens_flat = self.tokenize_obs(imgs, obs, flatten=True)
+    def _mlp_forward(self, imgs, obs, task=None):
+        tokens_flat = self.tokenize_obs(imgs, obs, task=task, flatten=True)
         return self._mlp(tokens_flat)
 
     @property

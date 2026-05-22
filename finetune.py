@@ -18,7 +18,15 @@ from data4robotics import misc, transforms
 base_path = os.path.dirname(os.path.abspath(__file__))
 
 def print_green(text):
-    print(f"\033[92m{text}\033[0m")
+    print(f"\033[92m{text}\033[0m}")
+
+
+def step_checkpoint_path(cfg: DictConfig, global_step: int) -> str:
+    """Milestone checkpoint, e.g. bc_ac20_..._step10000.ckpt (not overwritten)."""
+    stem, ext = os.path.splitext(cfg.checkpoint_path)
+    if not ext:
+        ext = ".ckpt"
+    return f"{stem}_step{global_step}{ext}"
 
 
 @hydra.main(
@@ -60,7 +68,7 @@ def bc_finetune(cfg: DictConfig):
             trainer.save_checkpoint(cfg.checkpoint_path, misc.GLOBAL_STEP)
         assert misc.GLOBAL_STEP >= 0, "GLOBAL_STEP not loaded correctly!"
 
-        # register checkpoint handler and enter train loop
+        # register checkpoint handler (always writes latest checkpoint_path)
         misc.set_checkpoint_handler(trainer, cfg.checkpoint_path)
         print(f"Starting at Global Step {misc.GLOBAL_STEP}")
 
@@ -81,10 +89,17 @@ def bc_finetune(cfg: DictConfig):
 
             # handle the image transform on GPU if specified
             if gpu_transform is not None:
-                (imgs, obs), actions, mask = batch
+                if len(batch) == 3:
+                    (imgs, obs), actions, mask = batch
+                    task = None
+                else:
+                    (imgs, obs), actions, mask, task = batch
                 imgs = {k: v.to(trainer.device_id) for k, v in imgs.items()}
                 imgs = {k: gpu_transform(v) for k, v in imgs.items()}
-                batch = ((imgs, obs), actions, mask)
+                if task is None:
+                    batch = ((imgs, obs), actions, mask)
+                else:
+                    batch = ((imgs, obs), actions, mask, task)
 
             trainer.optim.zero_grad()
             loss = trainer.training_step(batch, misc.GLOBAL_STEP)
@@ -103,10 +118,21 @@ def bc_finetune(cfg: DictConfig):
                 trainer.set_train()
 
             if misc.GLOBAL_STEP >= cfg.max_iterations:
+                final_step_path = step_checkpoint_path(cfg, misc.GLOBAL_STEP)
+                print_green(
+                    f"Saving final checkpoints at step {misc.GLOBAL_STEP}: "
+                    f"{final_step_path} and {cfg.checkpoint_path}"
+                )
+                trainer.save_checkpoint(final_step_path, misc.GLOBAL_STEP)
                 trainer.save_checkpoint(cfg.checkpoint_path, misc.GLOBAL_STEP)
                 return
-            elif misc.GLOBAL_STEP % cfg.save_freq == 0:
-                print_green(f"Saving checkpoint at global step {misc.GLOBAL_STEP}")
+            elif cfg.save_freq > 0 and misc.GLOBAL_STEP % cfg.save_freq == 0:
+                step_path = step_checkpoint_path(cfg, misc.GLOBAL_STEP)
+                print_green(
+                    f"Saving checkpoint at step {misc.GLOBAL_STEP}: "
+                    f"{step_path} (latest: {cfg.checkpoint_path})"
+                )
+                trainer.save_checkpoint(step_path, misc.GLOBAL_STEP)
                 trainer.save_checkpoint(cfg.checkpoint_path, misc.GLOBAL_STEP)
 
     # gracefully handle and log errors

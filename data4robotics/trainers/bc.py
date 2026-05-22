@@ -7,15 +7,26 @@
 from data4robotics.trainers.base import BaseTrainer
 
 
+def _unpack_batch(batch):
+    if len(batch) == 3:
+        (imgs, obs), actions, mask = batch
+        task = None
+    else:
+        (imgs, obs), actions, mask, task = batch
+    return imgs, obs, actions, mask, task
+
+
 class BehaviorCloning(BaseTrainer):
     def training_step(self, batch, global_step):
-        (imgs, obs), actions, mask = batch
+        imgs, obs, actions, mask, task = _unpack_batch(batch)
         imgs = {k: v.to(self.device_id) for k, v in imgs.items()}
         obs, actions, mask = [ar.to(self.device_id) for ar in (obs, actions, mask)]
+        if task is not None:
+            task = task.to(self.device_id)
 
         ac_flat = actions.reshape((actions.shape[0], -1))
         mask_flat = mask.reshape((mask.shape[0], -1))
-        loss = self.model(imgs, obs, ac_flat, mask_flat)
+        loss = self.model(imgs, obs, ac_flat, mask_flat, task=task)
         self.log("bc_loss", global_step, loss.item())
         if self.is_train:
             self.log("lr", global_step, self.lr)

@@ -1,0 +1,48 @@
+# LIBERO-90 task config for dit-policy.
+#
+# Matches the setup used in:
+#   FINAL_bc_ac10_resnet18_onlyimcond_iter150k_seed20346
+#
+# State  : robot_states (9-dim) = gripper(2) + ee_pos(3) + ee_ori_quat(4)
+# Cameras: agentview (cam0) + eye_in_hand (cam1)
+# Actions: 7-DOF OSC_POSE, already in [-1, 1]
+#
+# Task conditioning (set in finetune.yaml):
+#   scene    -> 23-d scene one-hot (needs obs task_name in robobuf)
+#   text     -> 90-d task one-hot (needs obs task_name in robobuf)
+#   language -> 768-d BERT embedding (needs obs lang or task_name-keyed pickle)
+
+_target_: data4robotics.task.BCTask
+obs_dim: 9
+ac_dim: 7
+n_cams: ${len:${task.train_buffer.cam_indexes}}
+
+train_buffer:
+  _target_: data4robotics.replay_buffer.RobobufReplayBuffer
+  buffer_path: ${buffer_path}
+  transform: ${transform:${train_transform}}
+  n_test_trans: 500
+  ac_chunk: ${ac_chunk}
+  mode: train
+  cam_indexes: [0, 1]
+  goal_indexes: []
+  past_frames: ${add:${img_chunk},-1}
+  ac_dim: ${task.ac_dim}
+  task_conditioning: ${task_conditioning}
+  task_conditioning_mode: ${task_conditioning_mode}
+  language_embedding_path: ${language_embedding_path}
+
+test_buffer:
+  _target_: data4robotics.replay_buffer.RobobufReplayBuffer
+  buffer_path: ${buffer_path}
+  transform: ${transform:preproc}
+  n_test_trans: 500
+  ac_chunk: ${ac_chunk}
+  mode: test
+  cam_indexes: ${task.train_buffer.cam_indexes}
+  goal_indexes: ${task.train_buffer.goal_indexes}
+  past_frames: ${add:${img_chunk},-1}
+  ac_dim: ${task.ac_dim}
+  task_conditioning: ${task_conditioning}
+  task_conditioning_mode: ${task_conditioning_mode}
+  language_embedding_path: ${language_embedding_path}
