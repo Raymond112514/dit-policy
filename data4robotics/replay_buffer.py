@@ -13,7 +13,6 @@ import numpy as np
 import torch
 import tqdm
 from robobuf import ReplayBuffer as RB
-from tensorflow.io import gfile
 from torch.utils.data import Dataset, IterableDataset
 
 # cache loading from the buffer list to half memory overhead
@@ -34,7 +33,7 @@ def _cached_load(path):
     if path in buf_cache:
         return buf_cache[path]
 
-    with gfile.GFile(path, "rb") as f:
+    with open(path, "rb") as f:
         buf = RB.load_traj_list(pkl.load(f))
     buf_cache[path] = buf
     return buf
@@ -131,7 +130,12 @@ class RobobufReplayBuffer(Dataset):
                     loss_mask.append(0.0)
 
             a_t = np.concatenate(chunked_actions, 0).astype(np.float32)
-            assert ac_dim == a_t.shape[-1]
+            if ac_dim != a_t.shape[-1]:
+                raise ValueError(
+                    f"Action dimension mismatch: expected ac_dim={ac_dim}, "
+                    f"but found action shape={a_t.shape} (last dim={a_t.shape[-1]}). "
+                    f"Please check your config or buffer data."
+                )
 
             loss_mask = np.array(loss_mask, dtype=np.float32)
             self.s_a_mask.append((t, a_t, loss_mask, loop_t))

@@ -17,11 +17,15 @@ from data4robotics import misc, transforms
 
 base_path = os.path.dirname(os.path.abspath(__file__))
 
+def print_green(text):
+    print(f"\033[92m{text}\033[0m")
+
 
 @hydra.main(
     config_path=os.path.join(base_path, "experiments"), config_name="finetune.yaml"
 )
 def bc_finetune(cfg: DictConfig):
+    print_green(cfg)
     try:
         resume_model = misc.init_job(cfg)
 
@@ -102,6 +106,7 @@ def bc_finetune(cfg: DictConfig):
                 trainer.save_checkpoint(cfg.checkpoint_path, misc.GLOBAL_STEP)
                 return
             elif misc.GLOBAL_STEP % cfg.save_freq == 0:
+                print_green(f"Saving checkpoint at global step {misc.GLOBAL_STEP}")
                 trainer.save_checkpoint(cfg.checkpoint_path, misc.GLOBAL_STEP)
 
     # gracefully handle and log errors
