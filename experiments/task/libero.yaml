@@ -27,10 +27,12 @@ train_buffer:
   cam_indexes: [0, 1]
   goal_indexes: []
   past_frames: ${add:${img_chunk},-1}
-  ac_dim: ${task.ac_dim}
+  ac_dim: 7
   task_conditioning: ${task_conditioning}
   task_conditioning_mode: ${task_conditioning_mode}
   language_embedding_path: ${language_embedding_path}
+  vae_checkpoint: ${vae_checkpoint}
+  max_transitions: ${max_transitions}
 
 test_buffer:
   _target_: data4robotics.replay_buffer.RobobufReplayBuffer
@@ -42,7 +44,9 @@ test_buffer:
   cam_indexes: ${task.train_buffer.cam_indexes}
   goal_indexes: ${task.train_buffer.goal_indexes}
   past_frames: ${add:${img_chunk},-1}
-  ac_dim: ${task.ac_dim}
+  ac_dim: 7
   task_conditioning: ${task_conditioning}
   task_conditioning_mode: ${task_conditioning_mode}
   language_embedding_path: ${language_embedding_path}
+  vae_checkpoint: ${vae_checkpoint}
+  max_transitions: ${max_transitions}

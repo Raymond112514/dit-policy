@@ -85,6 +85,8 @@ class RobobufReplayBuffer(Dataset):
         task_conditioning=False,
         task_conditioning_mode=None,
         language_embedding_path=None,
+        vae_checkpoint="",
+        max_transitions=-1,
     ):
         assert mode in ("train", "test"), "Mode must be train/test"
         buf = _cached_load(buffer_path)
@@ -105,6 +107,8 @@ class RobobufReplayBuffer(Dataset):
         index_list = (
             index_list[n_test_trans:] if mode == "train" else index_list[:n_test_trans]
         )
+        if max_transitions > 0:
+            index_list = index_list[:max_transitions]
 
         self.transform = transform
         self.s_a_mask = []
@@ -158,6 +162,70 @@ class RobobufReplayBuffer(Dataset):
             obs_meta = t.obs.obs if self.task_conditioning else None
             self.s_a_mask.append((t, a_t, loss_mask, loop_t, obs_meta))
 
+        self.use_vae = False
+        self.z_dim = None
+        if vae_checkpoint:
+            self._encode_with_vae(vae_checkpoint)
+
+    def _encode_with_vae(self, vae_checkpoint: str, encode_batch_size: int = 4096) -> None:
+        import torch
+        from data4robotics.vae import load_action_vae, vae_encode_device
+        from data4robotics.vae.preprocess import get_vae_image_transform
+
+        device = vae_encode_device()
+        print(f"Loading VAE from {vae_checkpoint} on {device} ...")
+        ckpt_args = torch.load(
+            vae_checkpoint, map_location=device, weights_only=False
+        ).get("args", {})
+        vae = load_action_vae(vae_checkpoint, device=device)
+        self.z_dim = vae.z_dim
+        self.use_vae = True
+
+        # Build image preproc if the VAE encoder is image-conditioned
+        img_preproc = None
+        vae_cam_index = None
+        if vae.encoder_use_image:
+            img_size = ckpt_args.get("image_size", 128)
+            vae_cam_index = ckpt_args.get("cam_index", 0)
+            img_preproc = get_vae_image_transform(img_size)
+            print(f"  VAE encoder is image-conditioned (cam={vae_cam_index}, size={img_size})")
+
+        print(f"Pre-encoding {len(self.s_a_mask)} transitions into z_dim={self.z_dim} latents ...")
+        new_s_a_mask = []
+        n = len(self.s_a_mask)
+
+        for start in tqdm.tqdm(range(0, n, encode_batch_size), desc="VAE encoding"):
+            entries = self.s_a_mask[start: start + encode_batch_size]
+
+            actions = torch.stack([_to_tensor(e[1]) for e in entries])  # (B, ac_chunk, ac_dim)
+
+            proprio = None
+            if vae.encoder_use_proprio:
+                proprio = torch.stack([_to_tensor(e[0].obs.state) for e in entries])
+
+            images = None
+            if vae.encoder_use_image:
+                # Stack as numpy first, single tensor conversion + batch transform
+                imgs_np = np.stack([e[0].obs.image(vae_cam_index) for e in entries])  # (B, H, W, C)
+                imgs_raw = torch.from_numpy(imgs_np.copy()).permute(0, 3, 1, 2).float() / 255  # (B, C, H, W)
+                images = img_preproc(imgs_raw)  # (B, C, H, W)
+
+            actions = actions.to(device)
+            if proprio is not None:
+                proprio = proprio.to(device)
+            if images is not None:
+                images = images.to(device)
+
+            with torch.no_grad():
+                mu, _ = vae.encode(actions, proprio=proprio, images=images)  # (B, z_dim)
+
+            ones_mask = np.ones(self.z_dim, dtype=np.float32)
+            for i, (t, _a_t, _mask, loop_t, obs_meta) in enumerate(entries):
+                z = mu[i].cpu().numpy()  # (z_dim,)
+                new_s_a_mask.append((t, z, ones_mask, loop_t, obs_meta))
+
+        self.s_a_mask = new_s_a_mask
+
     def __len__(self):
         return len(self.s_a_mask)
 
@@ -186,13 +254,18 @@ class RobobufReplayBuffer(Dataset):
             i_t[f"cam{idx}"] = i_c
 
         o_t, a_t = _to_tensor(o_t), _to_tensor(a_t)
-        loss_mask = _to_tensor(loss_mask)[:, None].repeat((1, a_t.shape[-1]))
-        assert (
-            loss_mask.shape[0] == a_t.shape[0]
-        ), "a_t and mask shape must be ac_chunk!"
+        if self.use_vae:
+            # a_t is (z_dim,), loss_mask is (z_dim,) all-ones — no chunk expansion needed
+            loss_mask = _to_tensor(loss_mask)
+        else:
+            loss_mask = _to_tensor(loss_mask)[:, None].repeat((1, a_t.shape[-1]))
+            assert (
+                loss_mask.shape[0] == a_t.shape[0]
+            ), "a_t and mask shape must be ac_chunk!"
 
         if self.task_conditioning:
             task_vec = self._task_encoder.encode_transition_obs(obs_meta)
             task_t = torch.from_numpy(task_vec)
             return (i_t, o_t), a_t, loss_mask, task_t
         return (i_t, o_t), a_t, loss_mask
+

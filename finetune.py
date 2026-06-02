@@ -17,9 +17,10 @@ from data4robotics import misc, transforms
 
 base_path = os.path.dirname(os.path.abspath(__file__))
 
-def print_green(text):
-    print(f"\033[92m{text}\033[0m}")
 
+def print_green(text):
+    _green, _reset = "\033[92m", "\033[0m"
+    print(f"{_green}{text}{_reset}")
 
 def step_checkpoint_path(cfg: DictConfig, global_step: int) -> str:
     """Milestone checkpoint, e.g. bc_ac20_..._step10000.ckpt (not overwritten)."""

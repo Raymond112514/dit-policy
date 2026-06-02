@@ -30,6 +30,8 @@ buffer_path: /home/raymond112514/dit-policy/robocasa_converted/buf.pkl
 ac_chunk: 10
 img_chunk: 1  
 train_transform: medium
+max_transitions: -1
+vae_checkpoint: ""
 
 # Task conditioning (scene=23d one-hot, text=90d task one-hot, language=768d BERT)
 task_conditioning: false
