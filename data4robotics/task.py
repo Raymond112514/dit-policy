@@ -13,6 +13,15 @@ from data4robotics.replay_buffer import IterableWrapper
 
 _TEST_WORKERS = 4
 
+def _align_actions_mask(actions, mask, model):
+    """Reshape (B, ac_chunk, ac_dim) for VAE latents stored as (B, z_dim)."""
+    if actions.ndim == 3:
+        return actions, mask
+    B = actions.shape[0]
+    ac_chunk, ac_dim = model.ac_chunk, model.ac_dim
+    actions = actions.reshape(B, ac_chunk, ac_dim)
+    mask = mask.reshape(B, ac_chunk, ac_dim)
+    return actions, mask
 
 def _build_data_loader(buffer, batch_size, num_workers, is_train=False):
     if is_train and not isinstance(buffer, IterableDataset):
@@ -85,6 +94,7 @@ class BCTask(DefaultTask):
 
                 # compare predicted actions versus GT
                 pred_actions = trainer.model.get_actions(imgs, obs, task=task)
+                actions, mask = _align_actions_mask(actions, mask, trainer.model)
 
                 # calculate l2 loss between pred_action and action
                 l2_delta = torch.square(mask * (pred_actions - actions))

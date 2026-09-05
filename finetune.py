@@ -113,7 +113,7 @@ def bc_finetune(cfg: DictConfig):
             if misc.GLOBAL_STEP % cfg.schedule_freq == 0:
                 trainer.step_schedule()
 
-            if misc.GLOBAL_STEP % cfg.eval_freq == 0:
+            if misc.GLOBAL_STEP % (cfg.eval_freq + 1000000000) == 0:
                 trainer.set_eval()
                 task.eval(trainer, misc.GLOBAL_STEP)
                 trainer.set_train()
